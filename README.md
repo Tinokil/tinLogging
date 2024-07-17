@@ -65,11 +65,6 @@ You can export logs to `JSON` or `HTML` formats:
 logger.export_json('exported_logs.json')
 logger.export_html('exported_logs.html')
 ```
-## Log Visualization
-`tinLogging` allows you to visualize log data using `Matplotlib`:
-```
-Logger.log_visualization('logs.txt')
-```
 ## Advanced Features
 ### Log Rotation
 `tinLogging` can rotate logs when the file size reaches a specified limit:
