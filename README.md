@@ -7,7 +7,6 @@
 - Supports multiple logging levels: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
 - Ability to log `HTTP` requests with detailed information.
 - Export logs to `JSON` and `HTML` formats for easy analysis.
-- Visualization of log data using `Matplotlib` for quick insights.
 - Log rotation and archiving to manage log file sizes efficiently.
 
 ## Installation
@@ -22,7 +21,8 @@ Here's how you can get started with `tinLogging`:
 ```
 from tinLogging import Logger
 
-logger = Logger()  # Creating a class object
+# Creating a class object
+logger = Logger()
 
 # Writing logs to a file
 logger.debug('This is a debug message')
