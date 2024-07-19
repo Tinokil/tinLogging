@@ -8,7 +8,7 @@
 - Ability to log `HTTP` requests with detailed information.
 - Export logs to `JSON` and `HTML` formats for easy analysis.
 - Log rotation and archiving to manage log file sizes efficiently.
-
+- Log statistics
 ## Installation
 
 Install `tinLogging` with pip using the following command:
@@ -16,13 +16,12 @@ Install `tinLogging` with pip using the following command:
 ```
 pip install tinLogging
 ```
-Quick Start
+### Quick Start
 Here's how you can get started with `tinLogging`:
 ```
 from tinLogging import Logger
 
-# Creating a class object
-logger = Logger()
+logger = Logger()  # Creating a class object
 
 # Writing logs to a file
 logger.debug('This is a debug message')
@@ -94,11 +93,5 @@ from tinLogging import ConsoleLogger
 console_logger = ConsoleLogger(debug_color = 'Blue')
 console_logger.debug('This is a debugging message')
 ```
-## Conclusion
+# Conclusion
 `tinLogging` is a powerful tool for managing application logs. With its user-friendly interface and extensive features, it's an excellent choice for developers looking to implement robust logging in their Python applications
-
-# Contributing
-Contributing in `tinLogging` is welcome! To contact us, write to the mail `zemedeuk@gmail.com`
-
-# License
-`tinLogging` is released under the MIT License. See the LICENSE file for more details
