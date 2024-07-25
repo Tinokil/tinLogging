@@ -2,36 +2,82 @@ import datetime
 import json
 import os
 import zipfile
+import re
+import atexit
 
 
-class Logger:
+class Levels:
+
+    def __init__(self):
+        self._LEVELS = {'DEBUG': 1, 'INFO': 2, 'WARNING': 3, 'ERROR': 4, 'CRITICAL': 5}
+
+    def new_level(self, level_name: str, level_priority: int):
+        """Adding a new log level and changing the priority of some level"""
+        self._LEVELS[level_name.upper()] = level_priority
+
+    def del_level(self, level_name: str):
+        """Deleting the log level"""
+        del self._LEVELS[level_name.upper()]
+
+
+class Logger(Levels):
     """Logging to a file"""
-    _LEVELS = {'DEBUG': 1, 'INFO': 2, 'WARNING': 3, 'ERROR': 4, 'CRITICAL': 5}
 
-    def __init__(self, filename: str = 'logs.txt', level: str = 'DEBUG'):
-        self._filename = filename
-        self._level = self._LEVELS[level]
+    def __init__(self, filename: str, level: str = 'DEBUG', buffer_size: int = 1,
+                 log_format: str = '[%time] - %lvl | %text'):
+        self._filename: str = filename
+        super().__init__()
+        self._level: str = self._LEVELS[level]
+        self._format: str = log_format
+        self._buffer_size: int = buffer_size
+        self._log_buffer: list = []
+        self._rotate_data: list = [False,]
+        # Сохранение буфера в файл после завершения работы интерпритатора
+        atexit.register(self.close)
+
+    def _format_message(self, level: str, message: str):
+        """Custom format processing"""
+        format_map = {
+            '%time': datetime.datetime.now(),
+            '%lvl': level,
+            '%text': message
+        }
+        formatted_message = self._format
+        for key, value in format_map.items():
+            formatted_message = formatted_message.replace(key, str(value))
+        return formatted_message
 
     def _log(self, level: str, message: str):
-        """Records a message if its level is equal to or higher than the set"""
-        if self._LEVELS[level] >= self._level:
-            timestamp = datetime.datetime.now().strftime('%Y-%d-%m %H:%M:%S.%f')[:-1]
-            formatted_message = f'[{timestamp}] - {level} | {message}\n'
-            self._write_to_file(formatted_message)
+        """Saving logs to the buffer and then saving logs in file"""
+        if self._rotate_data[0]:
+            self.rotate_logs(max_megabytes_size=self._rotate_data[1], zip_compression=self._rotate_data[2],
+                             auto_rotate=self._rotate_data[0])
+        self._log_buffer.append(self._format_message(level.upper(), message))
+        try:
+            if self._LEVELS[level.upper()] >= self._LEVELS['CRITICAL'] or len(self._log_buffer) >= self._buffer_size:
+                with open(self._filename, 'a', encoding='UTF-8') as file:
+                    file.write('\n'.join(self._log_buffer) + '\n')
+                self._log_buffer = []
+        except KeyError:
+            self._log_error('KeyError: The specified level is missing', 'ERROR')
 
-    def _write_to_file(self, message: str):
-        """Writes a message to a file"""
-        with open(self._filename, 'a', encoding='UTF-8') as file:
-            file.write(message)
+    def close(self):
+        """Saving a buffer to a file"""
+        if self._rotate_data[0]:
+            self.rotate_logs(max_megabytes_size=self._rotate_data[1], zip_compression=self._rotate_data[2],
+                             auto_rotate=self._rotate_data[0])
+        if self._log_buffer:
+            with open(self._filename, 'a', encoding='UTF-8') as file:
+                file.write('\n'.join(self._log_buffer) + '\n')
+            self._log_buffer = []
 
-    def http(self, request_code: int, request_message: str, url: str = None):
-        """Sending logs with HTTP requests"""
-        timestamp = datetime.datetime.now().strftime('%Y-%d-%m %H:%M:%S.%f')[:-1]
-        if url is None:
-            formatted_message = f'[{timestamp}] - HTTP {request_code} | {request_message}\n'
-        else:
-            formatted_message = f'[{timestamp}] - HTTP {request_code} | {request_message} - ({url})\n'
-        self._write_to_file(formatted_message)
+    @staticmethod
+    def _log_error(message: str, level: str = 'WARNING'):
+        """Logs errors to a separate error file"""
+        message = f'{datetime.datetime.now()} | {level.upper()} | {message}'
+        with open('logger_errors.txt', 'a', encoding='UTF-8') as error_file:
+            error_file.write(f'{message}\n')
+        print(f'\033[91m{message}\033[0m')
 
     def debug(self, message: str):
         """Sending debug level logs"""
@@ -53,29 +99,36 @@ class Logger:
         """Sending critical level logs"""
         self._log('CRITICAL', message)
 
-    @staticmethod
-    def _log_counts(file_name):
-        file_path = os.path.abspath(file_name)
-        log_counts = {'DEBUG': 0, 'INFO': 0, 'WARNING': 0, 'ERROR': 0, 'CRITICAL': 0}
-        try:
-            with open(file_path, 'r', encoding='UTF-8') as file:
-                for line in file:
-                    log_type = line.split('] - ')[1].split(' |')[0]
-                    if log_type not in log_counts:
-                        log_counts[log_type] = 0
-                    log_counts[log_type] += 1
-        except FileNotFoundError:
-            log_error = Logger('logger_errors.txt')
-            log_error.error('The log file is missing')
-            print('\033[91mFileNotFoundError: The log file is missing')
+    def log(self, level: str, message: str):
+        """Sending custom level logs"""
+        self._log(level.upper(), message)
+
+    def log_stats(self, files_name: str | list | tuple):
+        """Getting statistics on logs"""
+        if type(files_name) is str:
+            files_name = (files_name,)
+        log_counts = {level: 0 for level in set(self._LEVELS)}
+        for file_name in files_name:
+            try:
+                file_path = os.path.abspath(file_name)
+            except FileNotFoundError:
+                self._log_error(f"FileNotFoundError: [WinError 2] The specified file cannot be found: '{file_name}'",
+                                'CRITICAL')
+                return
+            try:
+                with open(file_path, 'r', encoding='UTF-8') as file:
+                    for line in file:
+                        for level in log_counts.keys():
+                            if level in line.upper():
+                                log_counts[level] += 1
+            except FileNotFoundError:
+                self._log_error(f"FileNotFoundError: [WinError 2] The specified file cannot be found: '{file_name}'",
+                                'CRITICAL')
+                return
         return log_counts
 
-    def log_stats(self):
-        stats = Logger._log_counts(self._filename)
-        return stats
-
     def export_json(self, export_file: str = 'log_export.json'):
-        """Function for exporting logs to JSON"""
+        """Exporting logs to an JSON file"""
         try:
             with open(self._filename, 'r', encoding='UTF-8') as log_file, open(export_file, 'w',
                                                                                encoding='UTF-8') as json_file:
@@ -84,9 +137,7 @@ class Logger:
                     logs_list.append(line.strip())
                 json.dump(logs_list, json_file, ensure_ascii=False, indent=4)
         except FileNotFoundError:
-            log_error = Logger('logger_errors.txt')
-            log_error.error('The log file is missing')
-            print('\033[91mFileNotFoundError: The log file is missing')
+            self._log_error('FileNotFoundError: The log file is missing')
 
     def export_html(self, export_file: str = 'log_export.html'):
         """Exporting logs to an HTML file"""
@@ -98,41 +149,33 @@ class Logger:
                     html_file.write(line)
                 html_file.write('</pre></body></html>')
         except FileNotFoundError:
-            log_error = Logger('logger_errors.txt')
-            log_error.error('The log file is missing')
-            print('\033[91mFileNotFoundError: The log file is missing')
+            self._log_error('FileNotFoundError: The log file is missing')
 
-    def rotate_logs(self, max_megabytes_size: float = 8):
+    def rotate_logs(self, max_megabytes_size: float, zip_compression: bool, auto_rotate: bool = False):
         """Log rotation when the maximum size in megabytes is reached"""
-        if os.path.getsize(self._filename) > max_megabytes_size * 1024 * 1024:
-            base, extension = os.path.splitext(self._filename)
-            log_number = 1
-            new_log_file = f"{base}_{log_number}{extension}"
-            while os.path.exists(new_log_file):
-                log_number += 1
-                new_log_file = f"rotate_{base}_{log_number}{extension}"
-            os.rename(self._filename, new_log_file)
-
-    def deleting_old_logs(self, days: float = 0, hours: float = 0):
-        """Clears logs older than the specified number of days"""
-        if days == 0 and hours == 0:
-            log_error = Logger('logger_errors.txt')
-            error_text = 'The number of days and hours must be specified'
-            log_error.warning(error_text)
-            print(f"\033[91m{error_text}")
-            return
-        timedelta_value = days if days is not None else hours / 24
-        cutoff_date = datetime.datetime.now() - datetime.timedelta(days=timedelta_value, hours=hours)
-
-        with open(self._filename, 'r+', encoding='UTF-8') as file:
-            lines = file.readlines()
-            file.seek(0)
-            for line in lines:
-                timestamp = line.split('] - ')[0].strip('[')
-                log_date = datetime.datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S.%f')
-                if log_date > cutoff_date:
-                    file.write(line)
-            file.truncate()
+        self._rotate_data = [auto_rotate, max_megabytes_size, zip_compression]
+        try:
+            if not os.path.exists(self._filename):
+                with open(self._filename, 'w', encoding='UTF-8') as file:
+                    file.write('')
+            if os.path.getsize(self._filename) > max_megabytes_size * 1024 * 1024:
+                base, extension = os.path.splitext(self._filename)
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                new_log_file = f"{base}_{timestamp}{extension}"
+                counter = 1
+                while os.path.exists(new_log_file):
+                    new_log_file = f"{base}_{timestamp}_{counter}{extension}"
+                    counter += 1
+                os.rename(self._filename, new_log_file)
+                if zip_compression:
+                    with zipfile.ZipFile(f"{new_log_file}.zip", 'w', zipfile.ZIP_DEFLATED) as zipf:
+                        zipf.write(new_log_file, os.path.basename(new_log_file))
+                    os.remove(new_log_file)
+        except FileNotFoundError:
+            self._log_error(f"FileNotFoundError: [WinError 2] The specified file cannot be found: '{self._filename}'",
+                            'WARNING')
+        except OSError as e:
+            self._log_error(f"Unknown OSError: {e}", 'CRITICAL')
 
     def archive_logs(self, archive_name: str = 'logs_archive.zip'):
         """Archives and delete old logs into a zip file"""
@@ -143,54 +186,84 @@ class Logger:
 
     def monitor_log_size(self, max_megabytes_size: float = 8):
         """Checks the size of the logs file and sends a warning"""
-        if os.path.getsize(self._filename) > max_megabytes_size * 1024 * 1024:
-            self.warning(f"The log file size has exceeded {max_megabytes_size}MB")
+        try:
+            if os.path.getsize(self._filename) > max_megabytes_size * 1024 * 1024:
+                return True
+            else:
+                return False
+        except FileNotFoundError:
+            self._log_error(f"FileNotFoundError: [WinError 2] The specified file cannot be found: '{self._filename}'",
+                            'CRITICAL')
+
+    def filter_logs(self, level: str):
+        """Filter logs by level from log file"""
+        filtered_logs = []
+        try:
+            with open(self._filename, 'r', encoding='UTF-8') as log_file:
+                for line in log_file:
+                    match = re.search(rf'{level.upper()}', line)
+                    if match:
+                        filtered_logs.append(line.strip())
+        except FileNotFoundError:
+            self._log_error('FileNotFoundError: The log file is missing')
+        return filtered_logs
+
+    def search_logs(self, text: str):
+        """Search logs by text from log file"""
+        searched_logs = []
+        try:
+            with open(self._filename, 'r', encoding='UTF-8') as log_file:
+                for line in log_file:
+                    if text.lower() in line.lower():
+                        searched_logs.append(line.strip())
+        except FileNotFoundError:
+            self._log_error('FileNotFoundError: The log file is missing')
+        return searched_logs
 
 
-class ConsoleLogger:
+class ConsoleLogger(Levels):
     """Logging into the console"""
-    _LEVELS = {'DEBUG': 1, 'INFO': 2, 'WARNING': 3, 'ERROR': 4, 'CRITICAL': 5}
     _COLORS = {
-        'Standard': '\033[0m',
-        'Red': '\033[91m',
-        'Green': '\033[92m',
-        'Yellow': '\033[93m',
-        'Blue': '\033[94m',
-        'Magenta': '\033[95m',
-        'Cyan': '\033[96m',
-        'White': '\033[97m'
+        'standard': '\033[0m',
+        'red': '\033[91m',
+        'green': '\033[92m',
+        'yellow': '\033[93m',
+        'blue': '\033[94m',
+        'magenta': '\033[95m',
+        'cyan': '\033[36m',
+        'white': '\033[97m'
     }
 
-    def __init__(self, level: str = 'DEBUG', debug_color: str = 'Cyan', info_color: str = 'Standard',
-                 warning_color: str = 'Yellow', error_color: str = 'Red', critical_color: str = 'Magenta',
-                 http_color: str = 'Green'):
-        self._level: int = self._LEVELS.get(level, 2)
+    def __init__(self, level: str = 'DEBUG', log_format: str = '[%time] - %lvl | %text', debug_color: str = 'cyan',
+                 info_color: str = 'white', warning_color: str = 'yellow', error_color: str = 'red',
+                 critical_color: str = 'magenta'):
+        super().__init__()
+        self._level: int = self._LEVELS[level]
         self._debug_color: str = self._COLORS[debug_color]
         self._info_color: str = self._COLORS[info_color]
         self._warning_color: str = self._COLORS[warning_color]
         self._error_color: str = self._COLORS[error_color]
         self._critical_color: str = self._COLORS[critical_color]
-        self._http_color: str = self._COLORS[http_color]
+        self._format: str = log_format
+
+    def _format_message(self, level: str, message: str, color: str):
+        """Custom format processing"""
+        format_map = {
+            '%time': f'\033[32m{datetime.datetime.now()}\033[0m',
+            '%lvl': f'{color}{level}{self._COLORS['standard']}',
+            '%text': message
+        }
+        formatted_message = self._format
+        for key, value in format_map.items():
+            formatted_message = formatted_message.replace(key, str(value))
+        return formatted_message
 
     def _log(self, level: str, message: str):
         """Records a message if its level is equal to or higher than the set"""
-        if self._LEVELS.get(level, 0) >= self._level:
-            timestamp = datetime.datetime.now().strftime('%Y-%d-%m %H:%M:%S.%f')[:-1]
+        if self._LEVELS[level] >= self._level:
             color = getattr(self, f'_{level.lower()}_color')
-            formatted_message = f'[{timestamp}] - {color}{level} {self._COLORS['Standard']}| {message}'
+            formatted_message = self._format_message(level, message, color)
             print(formatted_message)
-
-    def http(self, request_code: int, request_message: str, url: str = None):
-        """Sending logs with HTTP requests"""
-        timestamp = datetime.datetime.now().strftime('%Y-%d-%m %H:%M:%S.%f')[:-1]
-        color = self._http_color
-        if url is None:
-            formatted_message = (f'[{timestamp}] - {color}HTTP {request_code} {self._COLORS['Standard']}| '
-                                 f'{request_message}\n')
-        else:
-            formatted_message = (f'[{timestamp}] - {color}HTTP {request_code} {self._COLORS['Standard']}| '
-                                 f'{request_message} - ({url})\n')
-        print(formatted_message)
 
     def debug(self, message: str):
         """Sending debug level logs"""
@@ -212,14 +285,11 @@ class ConsoleLogger:
         """Sending critical level logs"""
         self._log('CRITICAL', message)
 
-
-if __name__ == '__main__':
-    # Example of using the ConsoleLogger class
-    logger = ConsoleLogger(http_color='Blue')
-    logger.debug('This is a debugging message')
-    logger.info('This is an informational message')
+    def log(self, level: str, message: str, color: str = 'standard'):
+        """Sending custom level logs"""
+        formatted_message = self._format_message(level, message, self._COLORS[color.lower()])
+        print(formatted_message)
     logger.warning('This is a warning')
     logger.error('This is an error message')
     logger.critical('This is a critical message')
     logger.http(404, 'Unknown page', 'https://random_unknown_url/b')
-  
